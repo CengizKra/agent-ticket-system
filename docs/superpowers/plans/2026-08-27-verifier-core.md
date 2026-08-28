@@ -178,7 +178,7 @@ def grant_hash(grant: dict) -> str:
 - [ ] **Step 6: Run test to verify it passes**
 
 Run: `pytest tests/journal/test_canon.py -v`
-Expected: 7 passed.
+Expected: 8 passed.
 
 - [ ] **Step 7: Commit**
 
@@ -1518,7 +1518,7 @@ Expected: 14 passed (1 good + 13 bad fixtures).
 - [ ] **Step 6: Run the full test suite to confirm nothing regressed**
 
 Run: `pytest -v`
-Expected: all tests across Tasks 1–9 pass (46 tests total: 7 + 5 + 4 + 10 + 3 + 9 + 8 + 5 + 14 — recount after Step 5 if any test was added/removed during implementation).
+Expected: all tests across Tasks 1–9 pass (66 tests total: 8 + 5 + 4 + 10 + 3 + 9 + 8 + 5 + 14 — recount after Step 5 if any test was added/removed during implementation).
 
 - [ ] **Step 7: Commit**
 
