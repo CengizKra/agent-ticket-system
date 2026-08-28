@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/grant.schema.json",
+  "title": "Grant",
+  "description": "The cryptographic image of a human approval. No agent may act without a valid grant. See docs/S-02-schema.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "ticket", "issued_at", "expires_at", "issued_by", "requested_by", "ticket_digest", "scope", "sig"],
+  "properties": {
+    "v": { "const": 1 },
+    "ticket": { "type": "string", "pattern": "^[0-9]+$", "description": "GitHub issue number, as a string." },
+    "issued_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "issued_by": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "login", "environment", "approval_run_id"],
+      "properties": {
+        "kind": { "const": "human" },
+        "login": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "environment": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "approval_run_id": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "requested_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "GitHub login of the issue author. Must be distinguishable from issued_by.login (check V-11)."
+    },
+    "ticket_digest": {
+      "$ref": "#/$defs/sha256",
+      "description": "Hash of the issue text at approval time. Binds the grant to exactly this content (countermeasure for T-03)."
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agents", "paths", "zones", "max_actions"],
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": { "enum": ["gatekeeper", "coder", "tester"] },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "paths": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 300 },
+          "minItems": 1,
+          "maxItems": 50,
+          "description": "Glob patterns. Zone 0 paths must never appear here."
+        },
+        "zones": {
+          "type": "array",
+          "items": { "enum": [1, 2] },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Zone 0 is not permitted here."
+        },
+        "max_actions": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "sig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alg", "bundle", "rekor_index"],
+      "properties": {
+        "alg": { "enum": ["ed25519", "ecdsa-p256"] },
+        "bundle": { "type": "string", "minLength": 1 },
+        "rekor_index": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

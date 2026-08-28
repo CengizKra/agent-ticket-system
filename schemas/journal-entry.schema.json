@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/journal-entry.schema.json",
+  "title": "Journal Entry",
+  "description": "An entry in the append-only governance journal. See docs/S-02-schema.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "seq", "prev", "ts", "run", "idempotency_key", "actor", "subject", "action", "inputs", "outputs", "result", "sig"],
+  "properties": {
+    "v": { "const": 1 },
+    "seq": { "type": "integer", "minimum": 0 },
+    "prev": { "$ref": "#/$defs/sha256" },
+    "ts": { "type": "string", "format": "date-time" },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflow_run_id", "attempt"],
+      "properties": {
+        "workflow_run_id": { "type": "integer", "minimum": 0 },
+        "attempt": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "identity"],
+      "properties": {
+        "kind": { "enum": ["human", "agent", "job"] },
+        "id": { "type": "string", "pattern": "^[a-z0-9-]{1,40}$" },
+        "identity": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ticket", "grant"],
+      "properties": {
+        "ticket": { "type": ["string", "null"], "pattern": "^[0-9]+$", "description": "GitHub issue number, as a string." },
+        "grant": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+      }
+    },
+    "action": {
+      "enum": [
+        "journal.genesis",
+        "ticket.received",
+        "ticket.triaged",
+        "grant.issued",
+        "grant.rejected",
+        "code.changed",
+        "tests.changed",
+        "branch.pushed",
+        "pr.opened",
+        "run.failed",
+        "grant.expired"
+      ]
+    },
+    "inputs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sha256" },
+      "maxItems": 100,
+      "description": "Exclusively hashes. Free text is invalid against the schema - the repository is public."
+    },
+    "outputs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sha256" },
+      "maxItems": 100
+    },
+    "result": { "enum": ["ok", "rejected", "failed", "skipped"] },
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "paths": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "maxItems": 200 },
+        "zone": { "enum": [0, 1, 2] },
+        "reason": {
+          "enum": [
+            "ticket_unreadable", "requester_not_allowed", "ticket_mutated",
+            "grant_expired", "grant_exhausted", "path_out_of_scope",
+            "zone_zero_touched", "conformance_failed", "duplicate_event",
+            "budget_exceeded"
+          ]
+        },
+        "note": { "type": "string", "maxLength": 300 },
+        "pr": { "type": "integer", "minimum": 1 },
+        "branch": { "type": "string", "maxLength": 200 }
+      }
+    },
+    "sig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alg", "bundle", "rekor_index"],
+      "properties": {
+        "alg": { "enum": ["ed25519", "ecdsa-p256"] },
+        "bundle": { "type": "string", "minLength": 1 },
+        "rekor_index": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}
