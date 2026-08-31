@@ -33,7 +33,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv
-    args = _parse_args(argv)
+    try:
+        args = _parse_args(argv)
+    except SystemExit as e:
+        # argparse calls sys.exit() on malformed argv (missing arg, unknown
+        # flag, -h/--help). main() must always return an int, never raise —
+        # Task 9 calls it in-process under pytest and expects a return value.
+        return e.code if isinstance(e.code, int) else 2
 
     if not args.skip_crypto:
         print(
@@ -47,7 +53,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         entries = load_journal(args.journal_path, since=args.since)
-    except (JournalLoadError, FileNotFoundError) as e:
+    except (JournalLoadError, OSError, UnicodeDecodeError) as e:
+        # OSError covers FileNotFoundError/IsADirectoryError/PermissionError;
+        # UnicodeDecodeError isn't an OSError subclass, listed separately.
         print(f"error: {e}", file=sys.stderr)
         return 2
 

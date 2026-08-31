@@ -61,3 +61,16 @@ def test_json_output_is_valid_json_with_failures_list(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)
     assert report["exit_code"] == 1
     assert any(f["check_id"] == "V-02" for f in report["failures"])
+
+
+def test_malformed_argv_returns_an_int_instead_of_raising_system_exit(capsys):
+    # missing the required journal_path argument
+    exit_code = main(["verify"])
+    assert isinstance(exit_code, int)
+    assert exit_code != 0
+
+
+def test_directory_instead_of_file_exits_2_cleanly(tmp_path, capsys):
+    exit_code = main(["verify", str(tmp_path), "--skip-crypto"])
+    assert exit_code == 2
+    assert "error:" in capsys.readouterr().err
