@@ -1013,6 +1013,23 @@ def test_non_dict_actor_does_not_crash(tmp_path):
     entry = {"seq": 1, "ts": "2026-08-27T11:00:00Z", "actor": "agent", "subject": {"grant": None}, "detail": {}}
     results = run_grant_checks([entry], grants_dir)
     assert results == []
+
+
+def test_non_string_grant_reference_reports_v08_instead_of_crashing(tmp_path):
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir()
+    entry = _agent_entry(1, grant_ref=None)
+    entry["subject"]["grant"] = 12345  # adversarial: not a string, would crash a bare regex .match()
+    results = run_grant_checks([entry], grants_dir)
+    assert any(r.check_id == "V-08" and r.seq == 1 for r in results)
+
+
+def test_corrupt_grant_json_reports_v08_instead_of_crashing(tmp_path):
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir(parents=True, exist_ok=True)
+    (grants_dir / ("7" * 64 + ".json")).write_text("{not valid json", encoding="utf-8")
+    results = run_grant_checks([_agent_entry(1, "sha256:" + "7" * 64)], grants_dir)
+    assert any(r.check_id == "V-08" and r.seq == 1 for r in results)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1060,7 +1077,11 @@ def _check_grant_reference_and_window_and_scope(entries: list[dict], grants_dir:
         if grant_ref is None:
             results.append(CheckResult("V-08", seq, "agent entry has no grant reference"))
             continue
-        grant = load_grant(grants_dir, grant_ref)
+        try:
+            grant = load_grant(grants_dir, grant_ref)
+        except (TypeError, ValueError, AttributeError) as e:
+            results.append(CheckResult("V-08", seq, f"referenced grant {grant_ref} could not be loaded: {e}"))
+            continue
         if grant is None:
             results.append(CheckResult("V-08", seq, f"referenced grant {grant_ref} not found"))
             continue
@@ -1116,7 +1137,7 @@ def run_grant_checks(entries: list[dict], grants_dir: Path) -> list[CheckResult]
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/verify/test_grant_checks.py -v`
-Expected: 10 passed.
+Expected: 12 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1563,7 +1584,7 @@ Expected: 14 passed (1 good + 13 bad fixtures).
 - [ ] **Step 6: Run the full test suite to confirm nothing regressed**
 
 Run: `pytest -v`
-Expected: all tests across Tasks 1–9 pass (70 tests total: 8 + 5 + 4 + 10 + 3 + 11 + 10 + 5 + 14 — recount after Step 5 if any test was added/removed during implementation).
+Expected: all tests across Tasks 1–9 pass (72 tests total: 8 + 5 + 4 + 10 + 3 + 11 + 12 + 5 + 14 — recount after Step 5 if any test was added/removed during implementation).
 
 - [ ] **Step 7: Commit**
 
