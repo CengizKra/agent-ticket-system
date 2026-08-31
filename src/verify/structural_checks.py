@@ -68,7 +68,8 @@ def _check_genesis(entries: list[dict]) -> list[CheckResult]:
         results.append(CheckResult("V-15", genesis.get("seq"), "genesis entry must have seq 0"))
     if genesis.get("prev") != GENESIS_PREV:
         results.append(CheckResult("V-15", genesis.get("seq"), "genesis entry must have prev of 64 zeros"))
-    if genesis.get("actor", {}).get("kind") != "human":
+    actor = genesis.get("actor")
+    if not isinstance(actor, dict) or actor.get("kind") != "human":
         results.append(CheckResult("V-15", genesis.get("seq"), "genesis entry actor.kind must be 'human'"))
     return results
 
@@ -79,8 +80,8 @@ def _check_ts_monotonic(entries: list[dict]) -> list[CheckResult]:
     for prev_entry, entry in zip(entries, entries[1:]):
         try:
             prev_ts, ts = _parse_ts(prev_entry["ts"]), _parse_ts(entry["ts"])
-        except (KeyError, ValueError):
-            continue  # malformed ts is already reported by V-01
+        except (KeyError, ValueError, TypeError, AttributeError):
+            continue  # malformed or wrong-typed ts is already reported by V-01
         if ts < prev_ts:
             results.append(CheckResult("V-16", entry.get("seq"), f"ts {entry['ts']} precedes previous ts {prev_entry['ts']}"))
     return results

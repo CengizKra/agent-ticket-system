@@ -90,3 +90,17 @@ def test_v16_reports_timestamp_going_backwards():
     bad = _next(genesis, ts="2026-08-27T09:00:00Z")  # before genesis's 10:00:00Z
     results = run_structural_checks([genesis, bad], is_full_run=True)
     assert any(r.check_id == "V-16" and r.seq == 1 for r in results)
+
+
+def test_non_string_ts_does_not_crash_the_run():
+    genesis = _genesis()
+    bad = _next(genesis, ts=12345)  # adversarial/malformed: not a string
+    results = run_structural_checks([genesis, bad], is_full_run=True)
+    assert any(r.check_id == "V-01" and r.seq == 1 for r in results)  # schema check still flags it
+
+
+def test_non_dict_actor_in_genesis_does_not_crash_and_reports_v15():
+    genesis = _genesis()
+    genesis["actor"] = "human"  # adversarial/malformed: not a dict
+    results = run_structural_checks([genesis], is_full_run=True)
+    assert any(r.check_id == "V-15" for r in results)
