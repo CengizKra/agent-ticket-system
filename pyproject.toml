@@ -11,6 +11,9 @@ dependencies = [
     "rfc8785>=0.0.1",
 ]
 
+[project.scripts]
+verify = "verify.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
