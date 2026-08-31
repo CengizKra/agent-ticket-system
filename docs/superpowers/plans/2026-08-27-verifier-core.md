@@ -755,6 +755,20 @@ def test_v16_reports_timestamp_going_backwards():
     bad = _next(genesis, ts="2026-08-27T09:00:00Z")  # before genesis's 10:00:00Z
     results = run_structural_checks([genesis, bad], is_full_run=True)
     assert any(r.check_id == "V-16" and r.seq == 1 for r in results)
+
+
+def test_non_string_ts_does_not_crash_the_run():
+    genesis = _genesis()
+    bad = _next(genesis, ts=12345)  # adversarial/malformed: not a string
+    results = run_structural_checks([genesis, bad], is_full_run=True)
+    assert any(r.check_id == "V-01" and r.seq == 1 for r in results)  # schema check still flags it
+
+
+def test_non_dict_actor_in_genesis_does_not_crash_and_reports_v15():
+    genesis = _genesis()
+    genesis["actor"] = "human"  # adversarial/malformed: not a dict
+    results = run_structural_checks([genesis], is_full_run=True)
+    assert any(r.check_id == "V-15" for r in results)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -836,7 +850,8 @@ def _check_genesis(entries: list[dict]) -> list[CheckResult]:
         results.append(CheckResult("V-15", genesis.get("seq"), "genesis entry must have seq 0"))
     if genesis.get("prev") != GENESIS_PREV:
         results.append(CheckResult("V-15", genesis.get("seq"), "genesis entry must have prev of 64 zeros"))
-    if genesis.get("actor", {}).get("kind") != "human":
+    actor = genesis.get("actor")
+    if not isinstance(actor, dict) or actor.get("kind") != "human":
         results.append(CheckResult("V-15", genesis.get("seq"), "genesis entry actor.kind must be 'human'"))
     return results
 
@@ -847,8 +862,8 @@ def _check_ts_monotonic(entries: list[dict]) -> list[CheckResult]:
     for prev_entry, entry in zip(entries, entries[1:]):
         try:
             prev_ts, ts = _parse_ts(prev_entry["ts"]), _parse_ts(entry["ts"])
-        except (KeyError, ValueError):
-            continue  # malformed ts is already reported by V-01
+        except (KeyError, ValueError, TypeError, AttributeError):
+            continue  # malformed or wrong-typed ts is already reported by V-01
         if ts < prev_ts:
             results.append(CheckResult("V-16", entry.get("seq"), f"ts {entry['ts']} precedes previous ts {prev_entry['ts']}"))
     return results
@@ -873,7 +888,7 @@ def run_structural_checks(entries: list[dict], *, is_full_run: bool) -> list[Che
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/verify/test_structural_checks.py -v`
-Expected: 9 passed.
+Expected: 11 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1518,7 +1533,7 @@ Expected: 14 passed (1 good + 13 bad fixtures).
 - [ ] **Step 6: Run the full test suite to confirm nothing regressed**
 
 Run: `pytest -v`
-Expected: all tests across Tasks 1–9 pass (66 tests total: 8 + 5 + 4 + 10 + 3 + 9 + 8 + 5 + 14 — recount after Step 5 if any test was added/removed during implementation).
+Expected: all tests across Tasks 1–9 pass (68 tests total: 8 + 5 + 4 + 10 + 3 + 11 + 8 + 5 + 14 — recount after Step 5 if any test was added/removed during implementation).
 
 - [ ] **Step 7: Commit**
 
