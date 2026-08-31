@@ -98,3 +98,20 @@ def test_non_dict_actor_does_not_crash(tmp_path):
     entry = {"seq": 1, "ts": "2026-08-27T11:00:00Z", "actor": "agent", "subject": {"grant": None}, "detail": {}}
     results = run_grant_checks([entry], grants_dir)
     assert results == []
+
+
+def test_non_string_grant_reference_reports_v08_instead_of_crashing(tmp_path):
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir()
+    entry = _agent_entry(1, grant_ref=None)
+    entry["subject"]["grant"] = 12345  # adversarial: not a string, would crash a bare regex .match()
+    results = run_grant_checks([entry], grants_dir)
+    assert any(r.check_id == "V-08" and r.seq == 1 for r in results)
+
+
+def test_corrupt_grant_json_reports_v08_instead_of_crashing(tmp_path):
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir(parents=True, exist_ok=True)
+    (grants_dir / ("7" * 64 + ".json")).write_text("{not valid json", encoding="utf-8")
+    results = run_grant_checks([_agent_entry(1, "sha256:" + "7" * 64)], grants_dir)
+    assert any(r.check_id == "V-08" and r.seq == 1 for r in results)

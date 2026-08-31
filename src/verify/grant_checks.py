@@ -34,7 +34,11 @@ def _check_grant_reference_and_window_and_scope(entries: list[dict], grants_dir:
         if grant_ref is None:
             results.append(CheckResult("V-08", seq, "agent entry has no grant reference"))
             continue
-        grant = load_grant(grants_dir, grant_ref)
+        try:
+            grant = load_grant(grants_dir, grant_ref)
+        except (TypeError, ValueError, AttributeError) as e:
+            results.append(CheckResult("V-08", seq, f"referenced grant {grant_ref} could not be loaded: {e}"))
+            continue
         if grant is None:
             results.append(CheckResult("V-08", seq, f"referenced grant {grant_ref} not found"))
             continue
@@ -73,7 +77,11 @@ def _check_self_approval(grants_dir: Path) -> list[CheckResult]:
     if not grants_dir.exists():
         return results
     for grant_file in sorted(grants_dir.glob("*.json")):
-        grant = json.loads(grant_file.read_text(encoding="utf-8"))
+        try:
+            grant = json.loads(grant_file.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            # Skip malformed or unreadable grant files; V-08 will catch them when referenced
+            continue
         if grant.get("issued_by", {}).get("login") == grant.get("requested_by"):
             results.append(CheckResult("V-11", None, f"grant {grant_file.stem} self-approved by {grant.get('requested_by')}"))
     return results
