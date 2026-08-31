@@ -1226,6 +1226,19 @@ def test_json_output_is_valid_json_with_failures_list(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)
     assert report["exit_code"] == 1
     assert any(f["check_id"] == "V-02" for f in report["failures"])
+
+
+def test_malformed_argv_returns_an_int_instead_of_raising_system_exit(capsys):
+    # missing the required journal_path argument
+    exit_code = main(["verify"])
+    assert isinstance(exit_code, int)
+    assert exit_code != 0
+
+
+def test_directory_instead_of_file_exits_2_cleanly(tmp_path, capsys):
+    exit_code = main(["verify", str(tmp_path), "--skip-crypto"])
+    assert exit_code == 2
+    assert "error:" in capsys.readouterr().err
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1272,7 +1285,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv
-    args = _parse_args(argv)
+    try:
+        args = _parse_args(argv)
+    except SystemExit as e:
+        # argparse calls sys.exit() on malformed argv (missing arg, unknown
+        # flag, -h/--help). main() must always return an int, never raise —
+        # Task 9 calls it in-process under pytest and expects a return value.
+        return e.code if isinstance(e.code, int) else 2
 
     if not args.skip_crypto:
         print(
@@ -1286,7 +1305,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         entries = load_journal(args.journal_path, since=args.since)
-    except (JournalLoadError, FileNotFoundError) as e:
+    except (JournalLoadError, OSError, UnicodeDecodeError) as e:
+        # OSError covers FileNotFoundError/IsADirectoryError/PermissionError;
+        # UnicodeDecodeError isn't an OSError subclass, listed separately.
         print(f"error: {e}", file=sys.stderr)
         return 2
 
@@ -1333,7 +1354,7 @@ Expected: reinstalls cleanly, `verify` command becomes available on PATH (not re
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `pytest tests/verify/test_cli.py -v`
-Expected: 5 passed.
+Expected: 7 passed.
 
 - [ ] **Step 6: Commit**
 
@@ -1584,7 +1605,7 @@ Expected: 14 passed (1 good + 13 bad fixtures).
 - [ ] **Step 6: Run the full test suite to confirm nothing regressed**
 
 Run: `pytest -v`
-Expected: all tests across Tasks 1–9 pass (72 tests total: 8 + 5 + 4 + 10 + 3 + 11 + 12 + 5 + 14 — recount after Step 5 if any test was added/removed during implementation).
+Expected: all tests across Tasks 1–9 pass (74 tests total: 8 + 5 + 4 + 10 + 3 + 11 + 12 + 7 + 14 — recount after Step 5 if any test was added/removed during implementation).
 
 - [ ] **Step 7: Commit**
 
