@@ -74,3 +74,13 @@ def test_directory_instead_of_file_exits_2_cleanly(tmp_path, capsys):
     exit_code = main(["verify", str(tmp_path), "--skip-crypto"])
     assert exit_code == 2
     assert "error:" in capsys.readouterr().err
+
+
+def test_note_about_skipped_checks_appears_even_on_a_failing_run(tmp_path, capsys):
+    genesis = _genesis()
+    bad = {**genesis, "seq": 5, "prev": entry_hash(genesis)}
+    path = _write_journal(tmp_path, [genesis, bad])
+    main(["verify", str(path), "--skip-crypto"])
+    stdout = capsys.readouterr().out
+    assert "NOTE:" in stdout
+    assert "V-05" in stdout

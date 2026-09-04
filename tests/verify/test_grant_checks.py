@@ -115,3 +115,38 @@ def test_corrupt_grant_json_reports_v08_instead_of_crashing(tmp_path):
     (grants_dir / ("7" * 64 + ".json")).write_text("{not valid json", encoding="utf-8")
     results = run_grant_checks([_agent_entry(1, "sha256:" + "7" * 64)], grants_dir)
     assert any(r.check_id == "V-08" and r.seq == 1 for r in results)
+
+
+def test_traversal_path_fails_both_v12_and_v13_despite_matching_grant_scope(tmp_path):
+    grants_dir = tmp_path / "grants"
+    grant_ref = _write_grant(grants_dir, "8" * 64, scope={"paths": ["src/**"], "max_actions": 5})
+    results = run_grant_checks(
+        [_agent_entry(1, grant_ref, paths=["src/verify/../sign/keyless.py"])], grants_dir
+    )
+    check_ids = {r.check_id for r in results if r.seq == 1}
+    assert "V-12" in check_ids
+    assert "V-13" in check_ids
+
+
+def test_self_approval_check_does_not_crash_on_non_dict_grant_json(tmp_path):
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir()
+    (grants_dir / ("a" * 63 + "9.json")).write_text(json.dumps(["not", "a", "dict"]), encoding="utf-8")
+    results = run_grant_checks([], grants_dir)
+    assert results == []
+
+
+def test_self_approval_check_does_not_crash_on_string_issued_by(tmp_path):
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir()
+    (grants_dir / ("b" * 63 + "9.json")).write_text(json.dumps({"issued_by": "cengiz", "requested_by": "cengiz"}), encoding="utf-8")
+    results = run_grant_checks([], grants_dir)
+    assert results == []  # issued_by is a string, not a dict — can't determine login, must not crash or false-positive
+
+
+def test_self_approval_check_no_false_positive_on_empty_grant(tmp_path):
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir()
+    (grants_dir / ("c" * 63 + "9.json")).write_text("{}", encoding="utf-8")
+    results = run_grant_checks([], grants_dir)
+    assert results == []

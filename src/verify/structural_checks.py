@@ -1,13 +1,18 @@
 """V-01, V-02, V-03, V-04, V-14, V-15, V-16 from docs/S-04-verifier.md sec 3."""
 from datetime import datetime
 
+import rfc8785
+
 from journal.canon import GENESIS_PREV, entry_hash
 from journal.schema import validate_entry
 from verify.result import CheckResult
 
 
 def _parse_ts(ts: str) -> datetime:
-    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError(f"'{ts}' has no timezone offset; S-02 sec 3 requires ts in RFC 3339 UTC")
+    return parsed
 
 
 def _check_schema(entries: list[dict]) -> list[CheckResult]:
@@ -36,7 +41,11 @@ def _check_prev_hash(entries: list[dict]) -> list[CheckResult]:
     """V-04: each entry's prev matches entry_hash of its predecessor."""
     results = []
     for prev_entry, entry in zip(entries, entries[1:]):
-        expected = entry_hash(prev_entry)
+        try:
+            expected = entry_hash(prev_entry)
+        except (rfc8785.CanonicalizationError, TypeError, ValueError, OverflowError) as e:
+            results.append(CheckResult("V-04", entry.get("seq"), f"could not compute hash of predecessor entry: {e}"))
+            continue
         actual = entry.get("prev")
         if actual != expected:
             results.append(CheckResult("V-04", entry.get("seq"), f"expected prev {expected}, got {actual}"))
@@ -49,6 +58,8 @@ def _check_idempotency_unique(entries: list[dict]) -> list[CheckResult]:
     results = []
     for entry in entries:
         key = entry.get("idempotency_key")
+        if not isinstance(key, str):
+            continue  # missing/wrong-typed key is already reported by V-01 (schema requires a string)
         if key in seen:
             results.append(
                 CheckResult("V-14", entry.get("seq"), f"duplicate idempotency_key '{key}' (first at seq {seen[key]})")
@@ -75,15 +86,30 @@ def _check_genesis(entries: list[dict]) -> list[CheckResult]:
 
 
 def _check_ts_monotonic(entries: list[dict]) -> list[CheckResult]:
-    """V-16: ts is non-decreasing across the sequence."""
+    """V-16: every present ts must be a well-formed, timezone-aware
+    timestamp, and non-decreasing across the sequence.
+
+    Tracks the last successfully-parsed timestamp rather than only
+    comparing adjacent pairs, so a single malformed ts in the middle of
+    the journal cannot break the monotonicity chain around it — that gap
+    was how this check used to be silently bypassable.
+    """
     results = []
-    for prev_entry, entry in zip(entries, entries[1:]):
+    last_good_ts = None
+    last_good_raw = None
+    for entry in entries:
+        raw_ts = entry.get("ts")
+        if raw_ts is None:
+            continue  # missing ts is already reported by V-01 (schema requires it)
         try:
-            prev_ts, ts = _parse_ts(prev_entry["ts"]), _parse_ts(entry["ts"])
-        except (KeyError, ValueError, TypeError, AttributeError):
-            continue  # malformed or wrong-typed ts is already reported by V-01
-        if ts < prev_ts:
-            results.append(CheckResult("V-16", entry.get("seq"), f"ts {entry['ts']} precedes previous ts {prev_entry['ts']}"))
+            ts = _parse_ts(raw_ts)
+        except (ValueError, TypeError, AttributeError):
+            results.append(CheckResult("V-16", entry.get("seq"), f"ts '{raw_ts}' is not a valid RFC 3339 UTC timestamp"))
+            continue  # don't let a malformed ts anchor the comparison or silently break the chain
+        if last_good_ts is not None and ts < last_good_ts:
+            results.append(CheckResult("V-16", entry.get("seq"), f"ts {raw_ts} precedes previous valid ts {last_good_raw}"))
+        last_good_ts = ts
+        last_good_raw = raw_ts
     return results
 
 

@@ -32,3 +32,27 @@ def test_raises_with_line_number_on_invalid_json(tmp_path):
     path = _write(tmp_path, ['{"seq": 0}', 'not json'])
     with pytest.raises(JournalLoadError, match="line 2"):
         load_journal(path)
+
+
+def test_non_dict_line_raises_journal_load_error(tmp_path):
+    path = _write(tmp_path, ['{"seq": 0}', '"just a string"'])
+    with pytest.raises(JournalLoadError, match="line 2"):
+        load_journal(path)
+
+
+def test_json_array_line_raises_journal_load_error(tmp_path):
+    path = _write(tmp_path, ['{"seq": 0}', '[1, 2, 3]'])
+    with pytest.raises(JournalLoadError, match="line 2"):
+        load_journal(path)
+
+
+def test_nan_constant_raises_journal_load_error(tmp_path):
+    path = _write(tmp_path, ['{"seq": 0, "detail": {"x": NaN}}'])
+    with pytest.raises(JournalLoadError, match="disallowed JSON constant"):
+        load_journal(path)
+
+
+def test_since_with_non_int_seq_does_not_crash(tmp_path):
+    path = _write(tmp_path, ['{"seq": "not-an-int"}', '{"seq": 5}'])
+    entries = load_journal(path, since=1)
+    assert entries == [{"seq": 5}]

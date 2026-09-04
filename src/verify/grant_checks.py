@@ -6,11 +6,14 @@ from pathlib import Path
 
 from verify.grants import load_grant
 from verify.result import CheckResult
-from verify.zones import is_zone_zero
+from verify.zones import is_safe_relative_path, is_zone_zero
 
 
 def _parse_ts(ts: str) -> datetime:
-    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError(f"'{ts}' has no timezone offset; S-02 sec 3 requires ts in RFC 3339 UTC")
+    return parsed
 
 
 def _check_grant_reference_and_window_and_scope(entries: list[dict], grants_dir: Path) -> list[CheckResult]:
@@ -62,7 +65,11 @@ def _check_grant_reference_and_window_and_scope(entries: list[dict], grants_dir:
             detail = entry.get("detail")
             paths = detail.get("paths", []) if isinstance(detail, dict) else []
             for path in paths:
-                if not any(fnmatch.fnmatch(path, pattern) for pattern in allowed_paths):
+                if not is_safe_relative_path(path):
+                    results.append(CheckResult("V-12", seq, f"path '{path}' is not a safe, normalized relative path"))
+                    results.append(CheckResult("V-13", seq, f"agent entry touches zone-0 path '{path}' (unsafe/unnormalized path is treated as zone-0)"))
+                    continue
+                if not any(fnmatch.fnmatchcase(path, pattern) for pattern in allowed_paths):
                     results.append(CheckResult("V-12", seq, f"path '{path}' not covered by grant scope.paths"))
                 if is_zone_zero(path):
                     results.append(CheckResult("V-13", seq, f"agent entry touches zone-0 path '{path}'"))
@@ -82,8 +89,13 @@ def _check_self_approval(grants_dir: Path) -> list[CheckResult]:
         except (ValueError, OSError):
             # Skip malformed or unreadable grant files; V-08 will catch them when referenced
             continue
-        if grant.get("issued_by", {}).get("login") == grant.get("requested_by"):
-            results.append(CheckResult("V-11", None, f"grant {grant_file.stem} self-approved by {grant.get('requested_by')}"))
+        if not isinstance(grant, dict):
+            continue
+        issued_by = grant.get("issued_by")
+        login = issued_by.get("login") if isinstance(issued_by, dict) else None
+        requested_by = grant.get("requested_by")
+        if login and requested_by and login == requested_by:
+            results.append(CheckResult("V-11", None, f"grant {grant_file.stem} self-approved by {requested_by}"))
     return results
 
 

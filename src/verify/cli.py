@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         if not failures:
             print("OK: all implemented checks passed.")
-            print(f"NOTE: {', '.join(_NOT_IMPLEMENTED_CHECKS)} were not run (--skip-crypto).")
+        print(f"NOTE: {', '.join(_NOT_IMPLEMENTED_CHECKS)} were not run (--skip-crypto).")
         for f in failures:
             print(f"FAIL {f.check_id} (seq={f.seq}): {f.message}")
 

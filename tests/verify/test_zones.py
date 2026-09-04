@@ -42,3 +42,26 @@ def test_tests_directory_is_not_zone_zero():
 
 def test_zone_2_doc_is_not_zone_zero():
     assert is_zone_zero("docs/S-05-agents.md") is False
+
+
+def test_traversal_path_is_treated_as_zone_zero():
+    assert is_zone_zero("src/verify/../sign/keyless.py") is True
+
+
+def test_backslash_path_is_treated_as_zone_zero():
+    assert is_zone_zero("src\\sign\\keyless.py") is True
+
+
+def test_absolute_path_is_treated_as_zone_zero():
+    assert is_zone_zero("/src/verify/cli.py") is True
+
+
+def test_double_slash_path_is_treated_as_zone_zero():
+    assert is_zone_zero("src//sign/keyless.py") is True
+
+
+def test_uppercase_path_does_not_match_via_case_insensitivity():
+    # fnmatchcase is case-sensitive on every platform — this must be False
+    # (a real zone-0 path in the actual case would still match; this proves
+    # the check no longer silently passes on Windows via os.path.normcase)
+    assert is_zone_zero("SRC/SIGN/keyless.py") is False
