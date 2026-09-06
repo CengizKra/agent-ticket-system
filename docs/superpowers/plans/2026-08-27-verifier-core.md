@@ -178,7 +178,7 @@ def grant_hash(grant: dict) -> str:
 - [ ] **Step 6: Run test to verify it passes**
 
 Run: `pytest tests/journal/test_canon.py -v`
-Expected: 7 passed.
+Expected: 8 passed.
 
 - [ ] **Step 7: Commit**
 
@@ -755,6 +755,20 @@ def test_v16_reports_timestamp_going_backwards():
     bad = _next(genesis, ts="2026-08-27T09:00:00Z")  # before genesis's 10:00:00Z
     results = run_structural_checks([genesis, bad], is_full_run=True)
     assert any(r.check_id == "V-16" and r.seq == 1 for r in results)
+
+
+def test_non_string_ts_does_not_crash_the_run():
+    genesis = _genesis()
+    bad = _next(genesis, ts=12345)  # adversarial/malformed: not a string
+    results = run_structural_checks([genesis, bad], is_full_run=True)
+    assert any(r.check_id == "V-01" and r.seq == 1 for r in results)  # schema check still flags it
+
+
+def test_non_dict_actor_in_genesis_does_not_crash_and_reports_v15():
+    genesis = _genesis()
+    genesis["actor"] = "human"  # adversarial/malformed: not a dict
+    results = run_structural_checks([genesis], is_full_run=True)
+    assert any(r.check_id == "V-15" for r in results)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -836,7 +850,8 @@ def _check_genesis(entries: list[dict]) -> list[CheckResult]:
         results.append(CheckResult("V-15", genesis.get("seq"), "genesis entry must have seq 0"))
     if genesis.get("prev") != GENESIS_PREV:
         results.append(CheckResult("V-15", genesis.get("seq"), "genesis entry must have prev of 64 zeros"))
-    if genesis.get("actor", {}).get("kind") != "human":
+    actor = genesis.get("actor")
+    if not isinstance(actor, dict) or actor.get("kind") != "human":
         results.append(CheckResult("V-15", genesis.get("seq"), "genesis entry actor.kind must be 'human'"))
     return results
 
@@ -847,8 +862,8 @@ def _check_ts_monotonic(entries: list[dict]) -> list[CheckResult]:
     for prev_entry, entry in zip(entries, entries[1:]):
         try:
             prev_ts, ts = _parse_ts(prev_entry["ts"]), _parse_ts(entry["ts"])
-        except (KeyError, ValueError):
-            continue  # malformed ts is already reported by V-01
+        except (KeyError, ValueError, TypeError, AttributeError):
+            continue  # malformed or wrong-typed ts is already reported by V-01
         if ts < prev_ts:
             results.append(CheckResult("V-16", entry.get("seq"), f"ts {entry['ts']} precedes previous ts {prev_entry['ts']}"))
     return results
@@ -873,7 +888,7 @@ def run_structural_checks(entries: list[dict], *, is_full_run: bool) -> list[Che
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/verify/test_structural_checks.py -v`
-Expected: 9 passed.
+Expected: 11 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -982,6 +997,39 @@ def test_v13_reports_zone_zero_touched_by_agent(tmp_path):
     grant_ref = _write_grant(grants_dir, "0" * 63 + "1", scope={"paths": ["src/sign/**"], "max_actions": 5})
     results = run_grant_checks([_agent_entry(1, grant_ref, paths=["src/sign/keyless.py"])], grants_dir)
     assert any(r.check_id == "V-13" and r.seq == 1 for r in results)
+
+
+def test_malformed_grant_reports_v08_instead_of_crashing(tmp_path):
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir(parents=True, exist_ok=True)
+    (grants_dir / ("6" * 64 + ".json")).write_text(json.dumps({"issued_at": "2026-08-27T10:00:00Z"}), encoding="utf-8")
+    results = run_grant_checks([_agent_entry(1, "sha256:" + "6" * 64)], grants_dir)
+    assert any(r.check_id == "V-08" and r.seq == 1 for r in results)
+
+
+def test_non_dict_actor_does_not_crash(tmp_path):
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir()
+    entry = {"seq": 1, "ts": "2026-08-27T11:00:00Z", "actor": "agent", "subject": {"grant": None}, "detail": {}}
+    results = run_grant_checks([entry], grants_dir)
+    assert results == []
+
+
+def test_non_string_grant_reference_reports_v08_instead_of_crashing(tmp_path):
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir()
+    entry = _agent_entry(1, grant_ref=None)
+    entry["subject"]["grant"] = 12345  # adversarial: not a string, would crash a bare regex .match()
+    results = run_grant_checks([entry], grants_dir)
+    assert any(r.check_id == "V-08" and r.seq == 1 for r in results)
+
+
+def test_corrupt_grant_json_reports_v08_instead_of_crashing(tmp_path):
+    grants_dir = tmp_path / "grants"
+    grants_dir.mkdir(parents=True, exist_ok=True)
+    (grants_dir / ("7" * 64 + ".json")).write_text("{not valid json", encoding="utf-8")
+    results = run_grant_checks([_agent_entry(1, "sha256:" + "7" * 64)], grants_dir)
+    assert any(r.check_id == "V-08" and r.seq == 1 for r in results)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1009,42 +1057,60 @@ def _parse_ts(ts: str) -> datetime:
 
 
 def _check_grant_reference_and_window_and_scope(entries: list[dict], grants_dir: Path) -> list[CheckResult]:
-    """V-08 (grant exists), V-09 (ts in window), V-10 (max_actions), V-12 (paths in scope), V-13 (no zone 0)."""
+    """V-08 (grant exists), V-09 (ts in window), V-10 (max_actions), V-12 (paths in scope), V-13 (no zone 0).
+
+    Any entry or grant shape this function can't safely read (non-dict
+    actor/subject/detail, or a grant file missing the fields this check
+    needs) is treated as a V-08 failure rather than raising — this
+    verifier trusts neither the repository nor the agents (S-04 sec 1),
+    so malformed input must produce a clean report, not a crash.
+    """
     results = []
     grant_use_counts: dict[str, int] = {}
     for entry in entries:
-        if entry.get("actor", {}).get("kind") != "agent":
+        actor = entry.get("actor")
+        if not isinstance(actor, dict) or actor.get("kind") != "agent":
             continue
         seq = entry.get("seq")
-        grant_ref = entry.get("subject", {}).get("grant")
+        subject = entry.get("subject")
+        grant_ref = subject.get("grant") if isinstance(subject, dict) else None
         if grant_ref is None:
             results.append(CheckResult("V-08", seq, "agent entry has no grant reference"))
             continue
-        grant = load_grant(grants_dir, grant_ref)
+        try:
+            grant = load_grant(grants_dir, grant_ref)
+        except (TypeError, ValueError, AttributeError) as e:
+            results.append(CheckResult("V-08", seq, f"referenced grant {grant_ref} could not be loaded: {e}"))
+            continue
         if grant is None:
             results.append(CheckResult("V-08", seq, f"referenced grant {grant_ref} not found"))
             continue
 
-        grant_use_counts[grant_ref] = grant_use_counts.get(grant_ref, 0) + 1
+        try:
+            grant_use_counts[grant_ref] = grant_use_counts.get(grant_ref, 0) + 1
 
-        ts = entry.get("ts")
-        if ts is not None:
-            issued, expires, actual = _parse_ts(grant["issued_at"]), _parse_ts(grant["expires_at"]), _parse_ts(ts)
-            if not (issued <= actual <= expires):
-                results.append(
-                    CheckResult("V-09", seq, f"ts {ts} outside grant window [{grant['issued_at']}, {grant['expires_at']}]")
-                )
+            ts = entry.get("ts")
+            if ts is not None:
+                issued, expires, actual = _parse_ts(grant["issued_at"]), _parse_ts(grant["expires_at"]), _parse_ts(ts)
+                if not (issued <= actual <= expires):
+                    results.append(
+                        CheckResult("V-09", seq, f"ts {ts} outside grant window [{grant['issued_at']}, {grant['expires_at']}]")
+                    )
 
-        max_actions = grant["scope"]["max_actions"]
-        if grant_use_counts[grant_ref] > max_actions:
-            results.append(CheckResult("V-10", seq, f"grant {grant_ref} exceeded max_actions={max_actions}"))
+            max_actions = grant["scope"]["max_actions"]
+            if grant_use_counts[grant_ref] > max_actions:
+                results.append(CheckResult("V-10", seq, f"grant {grant_ref} exceeded max_actions={max_actions}"))
 
-        allowed_paths = grant["scope"]["paths"]
-        for path in entry.get("detail", {}).get("paths", []):
-            if not any(fnmatch.fnmatch(path, pattern) for pattern in allowed_paths):
-                results.append(CheckResult("V-12", seq, f"path '{path}' not covered by grant scope.paths"))
-            if is_zone_zero(path):
-                results.append(CheckResult("V-13", seq, f"agent entry touches zone-0 path '{path}'"))
+            allowed_paths = grant["scope"]["paths"]
+            detail = entry.get("detail")
+            paths = detail.get("paths", []) if isinstance(detail, dict) else []
+            for path in paths:
+                if not any(fnmatch.fnmatch(path, pattern) for pattern in allowed_paths):
+                    results.append(CheckResult("V-12", seq, f"path '{path}' not covered by grant scope.paths"))
+                if is_zone_zero(path):
+                    results.append(CheckResult("V-13", seq, f"agent entry touches zone-0 path '{path}'"))
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            results.append(CheckResult("V-08", seq, f"referenced grant {grant_ref} is malformed: {e}"))
     return results
 
 
@@ -1071,7 +1137,7 @@ def run_grant_checks(entries: list[dict], grants_dir: Path) -> list[CheckResult]
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/verify/test_grant_checks.py -v`
-Expected: 8 passed.
+Expected: 12 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -1160,6 +1226,19 @@ def test_json_output_is_valid_json_with_failures_list(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)
     assert report["exit_code"] == 1
     assert any(f["check_id"] == "V-02" for f in report["failures"])
+
+
+def test_malformed_argv_returns_an_int_instead_of_raising_system_exit(capsys):
+    # missing the required journal_path argument
+    exit_code = main(["verify"])
+    assert isinstance(exit_code, int)
+    assert exit_code != 0
+
+
+def test_directory_instead_of_file_exits_2_cleanly(tmp_path, capsys):
+    exit_code = main(["verify", str(tmp_path), "--skip-crypto"])
+    assert exit_code == 2
+    assert "error:" in capsys.readouterr().err
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1206,7 +1285,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv
-    args = _parse_args(argv)
+    try:
+        args = _parse_args(argv)
+    except SystemExit as e:
+        # argparse calls sys.exit() on malformed argv (missing arg, unknown
+        # flag, -h/--help). main() must always return an int, never raise —
+        # Task 9 calls it in-process under pytest and expects a return value.
+        return e.code if isinstance(e.code, int) else 2
 
     if not args.skip_crypto:
         print(
@@ -1220,7 +1305,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         entries = load_journal(args.journal_path, since=args.since)
-    except (JournalLoadError, FileNotFoundError) as e:
+    except (JournalLoadError, OSError, UnicodeDecodeError) as e:
+        # OSError covers FileNotFoundError/IsADirectoryError/PermissionError;
+        # UnicodeDecodeError isn't an OSError subclass, listed separately.
         print(f"error: {e}", file=sys.stderr)
         return 2
 
@@ -1267,7 +1354,7 @@ Expected: reinstalls cleanly, `verify` command becomes available on PATH (not re
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `pytest tests/verify/test_cli.py -v`
-Expected: 5 passed.
+Expected: 7 passed.
 
 - [ ] **Step 6: Commit**
 
@@ -1518,7 +1605,7 @@ Expected: 14 passed (1 good + 13 bad fixtures).
 - [ ] **Step 6: Run the full test suite to confirm nothing regressed**
 
 Run: `pytest -v`
-Expected: all tests across Tasks 1–9 pass (46 tests total: 7 + 5 + 4 + 10 + 3 + 9 + 8 + 5 + 14 — recount after Step 5 if any test was added/removed during implementation).
+Expected: all tests across Tasks 1–9 pass (74 tests total: 8 + 5 + 4 + 10 + 3 + 11 + 12 + 7 + 14 — recount after Step 5 if any test was added/removed during implementation).
 
 - [ ] **Step 7: Commit**
 
@@ -1534,4 +1621,4 @@ git commit -m "feat: add conformance suite for V-01–V-04 and V-08–V-16"
 - **Spec coverage:** S-04 §3's 16 checks — 13 implemented and conformance-tested (V-01–V-04, V-08–V-16), 3 explicitly deferred with a loud CLI guard rather than silently skipped (V-05–V-07, Scope Note). S-00's zone-0 list is now consistent between `CLAUDE.md` and `S-00-overview.md` (fixed as a prerequisite to this plan, not part of it). S-02's grant storage gap is resolved by the `journal/grants/<hash>.json` convention, stated explicitly rather than left implicit.
 - **Not in this plan:** `src/sign/` (the signer job), `src/ticket/` (GitHub Issues adapter), the GitHub Actions workflow itself, and Plan 2 (real Sigstore signature/Rekor verification). Each needs its own plan.
 - **Known follow-up:** once Plan 2 lands, Task 8's `--skip-crypto` requirement and the `_NOT_IMPLEMENTED_CHECKS` list in `verify/cli.py` should be removed, and V-05/V-06/V-07 conformance fixtures (`bad-signature.jsonl`, `bad-identity-claim.jsonl`, `bad-rekor-index.jsonl`) added to Task 9's suite.
-- **Gap found, deliberately not fixed here:** S-04 §3's 16 checks validate journal entries against `journal-entry.schema.json`, but none of them validate a loaded grant against `grant.schema.json` — `run_grant_checks` in Task 7 reads `issued_at`, `expires_at`, `issued_by`, `requested_by`, and `scope` directly, trusting their shape. A malformed grant file (e.g. `max_actions` as a string) would raise an uncaught exception rather than a clean check failure. Adding a check for this means adding a new check ID, which is a Zone 2 change to S-04 but still a spec change beyond this plan's agreed scope (13 named checks) — flagging it for a deliberate decision rather than silently patching it in.
+- **Gap found, deliberately not fixed here:** S-04 §3's 16 checks validate journal entries against `journal-entry.schema.json`, but none of them validate a loaded grant against `grant.schema.json`. Update after the Task 6 review's crash-risk finding: `_check_grant_reference_and_window_and_scope` (Task 7) now wraps its grant-field access in `try/except (KeyError, TypeError, ValueError, AttributeError)`, so a malformed grant is reported as a V-08 failure instead of crashing the run — the crash risk is closed. What remains genuinely open is narrower: there is still no dedicated check (and no check ID) for "this grant is schema-valid," so a malformed grant is currently indistinguishable from a missing one in the report (both surface as V-08). Adding a distinct check for this means adding a new check ID, which is a Zone 2 change to S-04 but still a spec change beyond this plan's agreed scope (13 named checks) — flagging it for a deliberate decision rather than silently patching it in. `_check_self_approval`'s per-file JSON parse (glob over all grant files, not just referenced ones) has the same untreated crash risk on a corrupt file and is not covered by this fix — if triggered, it would crash the whole run exactly like the per-entry issue did, not just V-11. It is deferred anyway because the realistic trigger differs: journal entries are downstream of untrusted issue text (T-01's attack surface), while grant files are written only by the human-approved `signer` job (S-05) — reaching this path requires the grant store itself to already be corrupted through some other means, a materially less likely scenario than a crafted issue. Still an open gap, not a closed one.
